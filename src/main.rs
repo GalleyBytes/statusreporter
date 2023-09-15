@@ -1,5 +1,7 @@
 use std::env;
 use std::error::Error;
+use std::thread;
+use std::time::Duration;
 
 use reqwest;
 use serde::Deserialize;
@@ -10,8 +12,8 @@ use tokio;
 // Parse the json response of status
 // Fail if not status 200
 // On data, complete on wf completion with status report
-// Restart policy shall be OnFailure
-// TTL should be 0 to clean up environment quickly
+// Restart policy shall be OnFailure?
+// TTL should be 0 to clean up environment quickly?
 
 #[derive(Debug, Deserialize)]
 struct Response {
@@ -62,14 +64,40 @@ impl APIClient {
     #[tokio::main]
     async fn status_check(&self) -> Result<&str, Box<dyn Error>> {
         let url = format!("{}/api/v1/task/status", self.url);
-        let body = reqwest::get(url).await?.text().await?;
 
-        let response: Response =
-            serde_json::from_str(&body).expect("response body in wrong format");
+        let client = reqwest::Client::new();
 
-        if response.is_status_ok() & response.is_complete() {
-            println!("{}", response.data[0].current_state)
+        loop {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                "Token",
+                reqwest::header::HeaderValue::from_str(self.token.as_str()).unwrap(),
+            );
+
+            let body = client
+                .get(url.as_str())
+                .headers(headers)
+                .send()
+                .await?
+                .text()
+                .await?;
+
+            let response: Response =
+                serde_json::from_str(&body).expect("response body in wrong format");
+
+            if response.is_status_ok() & response.is_complete() {
+                // send a query to update status in database
+                println!("{}", response.data[0].current_state);
+                break;
+            } else if !response.is_status_ok() {
+                println!("{}", response.status_info.message);
+            } else if !response.is_complete() {
+                println!("workflow is still running");
+            }
+
+            thread::sleep(Duration::from_secs(30));
         }
+
         Ok((""))
     }
 }
