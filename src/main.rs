@@ -67,7 +67,7 @@ impl APIClient {
         let response: Response =
             serde_json::from_str(&body).expect("response body in wrong format");
 
-        if let status = response.is_status_ok() & response.is_complete() {
+        if response.is_status_ok() & response.is_complete() {
             println!("{}", response.data[0].current_state)
         }
         Ok((""))
