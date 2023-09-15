@@ -70,6 +70,7 @@ impl APIClient {
             "Token",
             reqwest::header::HeaderValue::from_str(self.token.as_str()).unwrap(),
         );
+        let mut waittime = 30;
         loop {
             let headers = token_header.clone();
 
@@ -97,9 +98,10 @@ impl APIClient {
 
                 if !response.is_complete() {
                     println!("workflow is still running");
+                    waittime = 30;
                 } else {
                     println!("workflow is {}", response.data[0].current_state);
-                    break;
+                    waittime = 600;
                 }
             } else {
                 println!("status query failed with {}", response.status_info.message);
@@ -108,7 +110,7 @@ impl APIClient {
                     break;
                 }
             }
-            thread::sleep(Duration::from_secs(30));
+            thread::sleep(Duration::from_secs(waittime));
         }
         Ok(())
     }
