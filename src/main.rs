@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::env;
 use std::error::Error;
+use std::process::exit;
 use std::thread;
 use std::time::Duration;
 
@@ -7,13 +9,6 @@ use reqwest;
 use serde::Deserialize;
 use serde_json;
 use tokio;
-
-// Query status of this resource (cluster/namespace/name)
-// Parse the json response of status
-// Fail if not status 200
-// On data, complete on wf completion with status report
-// Restart policy shall be OnFailure?
-// TTL should be 0 to clean up environment quickly?
 
 #[derive(Debug, Deserialize)]
 struct Response {
@@ -24,6 +19,10 @@ struct Response {
 impl Response {
     fn is_status_ok(&self) -> bool {
         self.status_info.status_code == 200
+    }
+
+    fn is_unauthorized(&self) -> bool {
+        self.status_info.status_code == 401
     }
 
     fn is_complete(&self) -> bool {
@@ -45,7 +44,7 @@ struct DataItem {
     did_start: bool,
     did_complete: bool,
     current_state: String,
-    current_task: String,
+    // current_task: String,
 }
 
 struct APIClient {
@@ -62,17 +61,17 @@ impl APIClient {
     }
 
     #[tokio::main]
-    async fn status_check(&self) -> Result<&str, Box<dyn Error>> {
+    async fn status_check(&self) -> Result<(), Box<dyn Error>> {
         let url = format!("{}/api/v1/task/status", self.url);
 
         let client = reqwest::Client::new();
-
+        let mut token_header = reqwest::header::HeaderMap::new();
+        token_header.insert(
+            "Token",
+            reqwest::header::HeaderValue::from_str(self.token.as_str()).unwrap(),
+        );
         loop {
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert(
-                "Token",
-                reqwest::header::HeaderValue::from_str(self.token.as_str()).unwrap(),
-            );
+            let headers = token_header.clone();
 
             let body = client
                 .get(url.as_str())
@@ -85,20 +84,33 @@ impl APIClient {
             let response: Response =
                 serde_json::from_str(&body).expect("response body in wrong format");
 
-            if response.is_status_ok() & response.is_complete() {
-                // send a query to update status in database
-                println!("{}", response.data[0].current_state);
-                break;
-            } else if !response.is_status_ok() {
-                println!("{}", response.status_info.message);
-            } else if !response.is_complete() {
-                println!("workflow is still running");
-            }
+            if response.is_status_ok() {
+                let headers = token_header.clone();
+                let mut map = HashMap::new();
+                map.insert("status", response.data[0].current_state.as_str());
+                client
+                    .post(url.as_str())
+                    .headers(headers)
+                    .json(&map)
+                    .send()
+                    .await?;
 
+                if !response.is_complete() {
+                    println!("workflow is still running");
+                } else {
+                    println!("workflow is {}", response.data[0].current_state);
+                    break;
+                }
+            } else {
+                println!("status query failed with {}", response.status_info.message);
+                if response.is_unauthorized() {
+                    // The token has expired and future calls will break
+                    break;
+                }
+            }
             thread::sleep(Duration::from_secs(30));
         }
-
-        Ok((""))
+        Ok(())
     }
 }
 
@@ -107,5 +119,11 @@ fn main() {
     let token = env::var("TFO_API_LOG_TOKEN").expect("$TFO_API_LOG_TOKEN is not set");
     let client = APIClient::new(url.as_str(), token.as_str());
 
-    let response = client.status_check();
+    match client.status_check() {
+        Ok(()) => exit(0),
+        Err(err) => {
+            println!("{}", err);
+            exit(1)
+        }
+    };
 }
