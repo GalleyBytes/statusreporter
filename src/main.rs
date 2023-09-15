@@ -71,6 +71,7 @@ impl APIClient {
             reqwest::header::HeaderValue::from_str(self.token.as_str()).unwrap(),
         );
         let mut waittime = 30;
+        let mut last_state = String::new();
         loop {
             let headers = token_header.clone();
 
@@ -86,15 +87,19 @@ impl APIClient {
                 serde_json::from_str(&body).expect("response body in wrong format");
 
             if response.is_status_ok() {
-                let headers = token_header.clone();
-                let mut map = HashMap::new();
-                map.insert("status", response.data[0].current_state.as_str());
-                client
-                    .post(url.as_str())
-                    .headers(headers)
-                    .json(&map)
-                    .send()
-                    .await?;
+                let current_state = response.data[0].current_state.clone();
+                if last_state != current_state {
+                    let headers = token_header.clone();
+                    let mut map = HashMap::new();
+                    map.insert("status", response.data[0].current_state.as_str());
+                    client
+                        .post(url.as_str())
+                        .headers(headers)
+                        .json(&map)
+                        .send()
+                        .await?;
+                    last_state = current_state;
+                }
 
                 if !response.is_complete() {
                     println!("workflow is still running");
